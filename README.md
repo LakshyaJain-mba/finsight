@@ -8,7 +8,7 @@ Built as a single Next.js 14 app (App Router) — no separate backend server.
 
 - **Frontend + API:** Next.js 14 (App Router, route handlers)
 - **Database + Vector store:** Supabase (Postgres + pgvector)
-- **LLM:** Claude (Anthropic) — Haiku for extraction/routing, Sonnet for synthesis
+- **LLM:** Google Gemini 2.5 Flash — extraction, intent routing, and synthesis
 - **Embeddings:** OpenAI `text-embedding-3-small` or Voyage `voyage-finance-2`
 - **UI:** Tailwind CSS + shadcn-style components + lucide-react
 
@@ -16,7 +16,7 @@ Built as a single Next.js 14 app (App Router) — no separate backend server.
 
 1. **Upload** a transcript (PDF or pasted text) → `/api/process-document`:
    - Extracts text (pdf-parse), chunks it (1500 chars / 200 overlap).
-   - Runs Claude Haiku to extract forward-looking **guidance statements**.
+   - Runs Gemini 2.5 Flash (structured JSON mode) to extract forward-looking **guidance statements**.
    - Generates embeddings per chunk and stores them in `document_chunks`.
    - Recomputes the company's **management credibility score**.
 2. **Dashboard** shows a credibility widget per company + recent documents.
@@ -25,7 +25,7 @@ Built as a single Next.js 14 app (App Router) — no separate backend server.
    - `guidance_lookup` → structured DB query
    - `document_rag` → pgvector similarity search (`match_chunks`)
    - `peer_comparison` → management scores across companies
-   - Answer synthesized by Claude Sonnet with citations.
+   - Answer synthesized by Gemini 2.5 Flash with citations.
 
 ## Project structure
 
@@ -80,7 +80,7 @@ Fill in `.env.local`:
 
 | Variable | Required | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | yes | Claude API key |
+| `GEMINI_API_KEY` | yes | Google Gemini API key (aistudio.google.com/apikey) |
 | `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Supabase anon key |
 | `SUPABASE_SERVICE_ROLE_KEY` | yes | Server-only; used by route handlers |

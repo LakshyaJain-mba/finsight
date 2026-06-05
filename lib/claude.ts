@@ -1,4 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk';
+// LLM wrapper — Google Gemini 2.5 Flash via the Generative Language REST API.
+//
+// This module is the single provider abstraction. Exported function signatures
+// (extractGuidance / classifyIntent / synthesizeAnswer) and their return types
+// are unchanged, so no caller (agent.ts, process-document route) needs edits.
+// Prompts (lib/prompts.ts) and JSON schemas are preserved exactly.
 import {
   EXTRACTION_SYSTEM_PROMPT,
   INTENT_CLASSIFICATION_PROMPT,
@@ -8,28 +13,28 @@ import {
 } from './prompts';
 import type { AgentIntent, ChatMessage, RawExtractionResult } from '@/types';
 
-// Lazily instantiate so importing this module never requires the API key at
-// build time. The key is resolved on first use inside a request.
-let _client: Anthropic | null = null;
-function client(): Anthropic {
-  if (!_client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error('Missing environment variable: ANTHROPIC_API_KEY');
-    }
-    _client = new Anthropic({ apiKey });
-  }
-  return _client;
-}
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
+// Model identifiers. `fast`/`standard` both map to Gemini 2.5 Flash (the
+// migration target); `powerful` is provided for parity with the prior map.
 export const MODELS = {
-  fast: 'claude-haiku-4-5',
-  standard: 'claude-sonnet-4-5',
-  powerful: 'claude-opus-4-5',
+  fast: 'gemini-2.5-flash',
+  standard: 'gemini-2.5-flash',
+  powerful: 'gemini-2.5-pro',
 } as const;
+
+// Lazily resolve the key so importing this module never requires it at build time.
+function apiKey(): string {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) {
+    throw new Error('Missing environment variable: GEMINI_API_KEY');
+  }
+  return key;
+}
 
 // Models occasionally wrap JSON in markdown fences or add stray whitespace.
 // Strip fences and isolate the outermost JSON object before parsing.
+// (Retained as the fallback even when structured JSON mode is requested.)
 function parseJson<T>(raw: string): T {
   let text = raw.trim();
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -44,31 +49,90 @@ function parseJson<T>(raw: string): T {
   return JSON.parse(text) as T;
 }
 
+interface GeminiPart {
+  text?: string;
+}
+interface GeminiContent {
+  role?: 'user' | 'model';
+  parts: GeminiPart[];
+}
+interface GeminiResponse {
+  candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string }[];
+  promptFeedback?: { blockReason?: string };
+}
+
+interface GenerateOptions {
+  model: string;
+  system: string;
+  contents: GeminiContent[];
+  maxOutputTokens: number;
+  json: boolean;
+}
+
+async function generate(opts: GenerateOptions): Promise<string> {
+  const body = {
+    systemInstruction: { parts: [{ text: opts.system }] },
+    contents: opts.contents,
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: opts.maxOutputTokens,
+      // Disable "thinking" so the full token budget goes to the answer and
+      // structured JSON is never truncated by reasoning tokens.
+      thinkingConfig: { thinkingBudget: 0 },
+      // Structured JSON mode for extraction/intent.
+      ...(opts.json ? { responseMimeType: 'application/json' } : {}),
+    },
+  };
+
+  const res = await fetch(
+    `${GEMINI_API_BASE}/models/${opts.model}:generateContent?key=${apiKey()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Gemini API error: ${res.status} ${await res.text()}`);
+  }
+
+  const data = (await res.json()) as GeminiResponse;
+  if (data.promptFeedback?.blockReason) {
+    throw new Error(`Gemini blocked the request: ${data.promptFeedback.blockReason}`);
+  }
+
+  const parts = data.candidates?.[0]?.content?.parts ?? [];
+  return parts.map((p) => p.text ?? '').join('');
+}
+
 export async function extractGuidance(
   text: string,
   period: string,
   company: string
 ): Promise<RawExtractionResult> {
-  // Use Haiku for extraction — structured task, cost-sensitive
-  const response = await client().messages.create({
+  // Use Flash for extraction — structured task, cost-sensitive.
+  const raw = await generate({
     model: MODELS.fast,
-    max_tokens: 2000,
     system: EXTRACTION_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: buildExtractionUserPrompt(text, period, company) }],
+    contents: [
+      { role: 'user', parts: [{ text: buildExtractionUserPrompt(text, period, company) }] },
+    ],
+    maxOutputTokens: 2000,
+    json: true,
   });
-  const raw = response.content[0].type === 'text' ? response.content[0].text : '';
   return parseJson<RawExtractionResult>(raw);
 }
 
 export async function classifyIntent(query: string): Promise<AgentIntent> {
-  const response = await client().messages.create({
+  const raw = await generate({
     model: MODELS.fast,
-    max_tokens: 150,
     system: INTENT_CLASSIFICATION_PROMPT,
-    messages: [{ role: 'user', content: query }],
+    contents: [{ role: 'user', parts: [{ text: query }] }],
+    maxOutputTokens: 150,
+    json: true,
   });
-  const raw = response.content[0].type === 'text' ? response.content[0].text : '{}';
-  return parseJson<AgentIntent>(raw);
+  return parseJson<AgentIntent>(raw || '{}');
 }
 
 export async function synthesizeAnswer(
@@ -76,15 +140,18 @@ export async function synthesizeAnswer(
   context: string,
   history: ChatMessage[]
 ): Promise<string> {
-  const messages = [
-    ...history.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-    { role: 'user' as const, content: buildRAGPrompt(query, [], context) },
+  const contents: GeminiContent[] = [
+    ...history.map((m) => ({
+      role: (m.role === 'assistant' ? 'model' : 'user') as 'user' | 'model',
+      parts: [{ text: m.content }],
+    })),
+    { role: 'user', parts: [{ text: buildRAGPrompt(query, [], context) }] },
   ];
-  const response = await client().messages.create({
+  return generate({
     model: MODELS.standard,
-    max_tokens: 600,
     system: SYNTHESIS_SYSTEM_PROMPT,
-    messages,
+    contents,
+    maxOutputTokens: 600,
+    json: false,
   });
-  return response.content[0].type === 'text' ? response.content[0].text : '';
 }
