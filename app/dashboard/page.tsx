@@ -31,11 +31,11 @@ export default async function DashboardPage() {
   const [{ data: companies }, { data: docs }, { count: pendingCount }] = await Promise.all([
     supabase
       .from('companies')
-      .select('*, management_scores(*)')
+      .select('*, management_scores!left(*)')
       .order('created_at', { ascending: false }),
     supabase
       .from('documents')
-      .select('id, title, period, doc_type, created_at, companies(ticker, name)')
+      .select('id, title, period, doc_type, created_at, companies!left(ticker, name)')
       .order('created_at', { ascending: false })
       .limit(8),
     supabase

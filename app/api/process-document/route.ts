@@ -241,29 +241,53 @@ export async function POST(req: NextRequest) {
     let chunksStored = 0;
     let embeddingWarning: string | null = null;
 
-    try {
-      const embeddings = await mapWithConcurrency(chunks, 5, (chunk) =>
-        generateEmbedding(chunk)
-      );
-      if (chunks.length > 0) {
-        const { error: chunkErr } = await supabase.from('document_chunks').insert(
-          chunks.map((content, i) => ({
+    if (chunks.length > 0) {
+      try {
+        // Embed per-chunk; a single failure must not discard the whole batch.
+        const embeddings = await mapWithConcurrency(chunks, 5, async (chunk) => {
+          try {
+            return await generateEmbedding(chunk, 'document');
+          } catch (e) {
+            console.error('[process-document] embedding failed for a chunk:', e);
+            return null;
+          }
+        });
+
+        // pgvector expects the vector TEXT literal "[0.1,0.2,...]", not a raw
+        // JSON array. Passing number[] makes PostgREST send a JSON array that
+        // pgvector rejects — which previously failed silently and left
+        // document_chunks empty. Stringify to the literal form.
+        const rows = chunks
+          .map((content, i) => ({ content, embedding: embeddings[i], index: i }))
+          .filter((r) => Array.isArray(r.embedding))
+          .map((r) => ({
             document_id: doc.id,
-            chunk_index: i,
-            content,
-            embedding: embeddings[i],
+            chunk_index: r.index,
+            content: r.content,
+            embedding: JSON.stringify(r.embedding),
             metadata: { period, doc_type: docType },
-          }))
-        );
-        if (chunkErr) {
-          embeddingWarning = `Chunks not stored: ${chunkErr.message}`;
+          }));
+
+        if (rows.length === 0) {
+          embeddingWarning =
+            'Embedding generation failed for all chunks; RAG disabled for this doc';
         } else {
-          chunksStored = chunks.length;
+          const { error: chunkErr } = await supabase.from('document_chunks').insert(rows);
+          if (chunkErr) {
+            console.error('[process-document] document_chunks insert error:', chunkErr);
+            embeddingWarning = `Chunks not stored: ${chunkErr.message}`;
+          } else {
+            chunksStored = rows.length;
+            if (rows.length < chunks.length) {
+              embeddingWarning = `Stored ${rows.length}/${chunks.length} chunks; some embeddings failed`;
+            }
+          }
         }
+      } catch (e) {
+        console.error('[process-document] embedding/storage step failed:', e);
+        embeddingWarning =
+          e instanceof Error ? e.message : 'Embedding generation failed; RAG disabled for this doc';
       }
-    } catch (e) {
-      embeddingWarning =
-        e instanceof Error ? e.message : 'Embedding generation failed; RAG disabled for this doc';
     }
 
     // 5. Mark processed and recompute the management credibility score.

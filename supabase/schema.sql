@@ -118,6 +118,7 @@ create index on document_chunks using ivfflat (embedding vector_cosine_ops)
   with (lists = 100);
 
 -- Vector similarity search used by the document_rag agent path.
+-- Returns the source document period so chat citations are traceable.
 create or replace function match_chunks(
   query_embedding vector(1536),
   ticker_filter text,
@@ -127,6 +128,7 @@ returns table (
   id uuid,
   document_id uuid,
   content text,
+  period varchar(20),
   similarity float
 )
 language sql stable
@@ -135,6 +137,7 @@ as $$
     dc.id,
     dc.document_id,
     dc.content,
+    d.period,
     1 - (dc.embedding <=> query_embedding) as similarity
   from document_chunks dc
   join documents d on dc.document_id = d.id

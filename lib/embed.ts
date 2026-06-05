@@ -1,21 +1,73 @@
 // Embedding generation + text chunking.
 //
-// Provider selection:
-//  - If VOYAGE_API_KEY is set, use Voyage AI voyage-finance-2 (finance-tuned).
-//  - Otherwise fall back to OpenAI text-embedding-3-small.
-// Both are normalised to 1536 dimensions to match the pgvector column.
+// Provider selection (first available wins):
+//  1. GEMINI_API_KEY  -> Google gemini-embedding-001  (default; reuses the LLM key)
+//  2. VOYAGE_API_KEY  -> Voyage voyage-finance-2       (finance-tuned alternative)
+//  3. OPENAI_API_KEY  -> OpenAI text-embedding-3-small
+// All providers are normalised to 1536 dimensions to match the pgvector column
+// (document_chunks.embedding vector(1536)). No schema change is required.
 
 const EMBED_DIMS = 1536;
 
-interface OpenAIEmbeddingResponse {
+// Retrieval quality improves when documents and queries are embedded with
+// distinct task types (asymmetric retrieval). Mapped per provider below.
+export type EmbeddingKind = 'document' | 'query';
+
+interface ProviderListResponse {
   data: { embedding: number[] }[];
 }
 
-interface VoyageEmbeddingResponse {
-  data: { embedding: number[] }[];
+interface GeminiEmbeddingResponse {
+  embedding?: { values: number[] };
 }
 
-async function embedWithVoyage(text: string, apiKey: string): Promise<number[]> {
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+
+// L2-normalise so stored vectors are unit length. Google returns normalised
+// vectors only for the default 3072 dims; for other sizes we normalise here.
+// (Cosine ranking is unaffected, but unit vectors keep the store consistent.)
+function l2normalize(v: number[]): number[] {
+  let sum = 0;
+  for (const x of v) sum += x * x;
+  const norm = Math.sqrt(sum);
+  return norm > 0 ? v.map((x) => x / norm) : v;
+}
+
+async function embedWithGemini(
+  text: string,
+  apiKey: string,
+  kind: EmbeddingKind
+): Promise<number[]> {
+  const taskType = kind === 'query' ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT';
+  const res = await fetch(
+    `${GEMINI_API_BASE}/models/gemini-embedding-001:embedContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'models/gemini-embedding-001',
+        content: { parts: [{ text }] },
+        taskType,
+        outputDimensionality: EMBED_DIMS,
+      }),
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`Gemini embedding failed: ${res.status} ${await res.text()}`);
+  }
+  const json = (await res.json()) as GeminiEmbeddingResponse;
+  const values = json.embedding?.values;
+  if (!values || values.length === 0) {
+    throw new Error('Gemini embedding returned no values');
+  }
+  return l2normalize(values);
+}
+
+async function embedWithVoyage(
+  text: string,
+  apiKey: string,
+  kind: EmbeddingKind
+): Promise<number[]> {
   const res = await fetch('https://api.voyageai.com/v1/embeddings', {
     method: 'POST',
     headers: {
@@ -25,13 +77,14 @@ async function embedWithVoyage(text: string, apiKey: string): Promise<number[]> 
     body: JSON.stringify({
       input: text,
       model: 'voyage-finance-2',
+      input_type: kind, // 'document' | 'query'
       output_dimension: EMBED_DIMS,
     }),
   });
   if (!res.ok) {
     throw new Error(`Voyage embedding failed: ${res.status} ${await res.text()}`);
   }
-  const json = (await res.json()) as VoyageEmbeddingResponse;
+  const json = (await res.json()) as ProviderListResponse;
   return json.data[0].embedding;
 }
 
@@ -51,19 +104,31 @@ async function embedWithOpenAI(text: string, apiKey: string): Promise<number[]> 
   if (!res.ok) {
     throw new Error(`OpenAI embedding failed: ${res.status} ${await res.text()}`);
   }
-  const json = (await res.json()) as OpenAIEmbeddingResponse;
+  const json = (await res.json()) as ProviderListResponse;
   return json.data[0].embedding;
 }
 
-export async function generateEmbedding(text: string): Promise<number[]> {
+/**
+ * Generate a 1536-dim embedding for a chunk (`document`) or a search string
+ * (`query`). Provider is chosen from available env keys, Gemini first.
+ */
+export async function generateEmbedding(
+  text: string,
+  kind: EmbeddingKind = 'document'
+): Promise<number[]> {
   const input = text.replace(/\s+/g, ' ').trim().slice(0, 8000);
   if (!input) {
     throw new Error('Cannot embed empty text');
   }
 
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (geminiKey) {
+    return embedWithGemini(input, geminiKey, kind);
+  }
+
   const voyageKey = process.env.VOYAGE_API_KEY;
   if (voyageKey) {
-    return embedWithVoyage(input, voyageKey);
+    return embedWithVoyage(input, voyageKey, kind);
   }
 
   const openaiKey = process.env.OPENAI_API_KEY;
@@ -72,7 +137,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   }
 
   throw new Error(
-    'No embedding provider configured. Set VOYAGE_API_KEY or OPENAI_API_KEY.'
+    'No embedding provider configured. Set GEMINI_API_KEY (default), VOYAGE_API_KEY, or OPENAI_API_KEY.'
   );
 }
 

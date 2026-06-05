@@ -30,7 +30,7 @@ export default async function CompanyPage({ params }: { params: { ticker: string
   const [{ data: statements }, { data: score }] = await Promise.all([
     supabase
       .from('guidance_statements')
-      .select('*, documents(period, title), guidance_outcomes(*)')
+      .select('*, documents!left(period, title), guidance_outcomes!left(*)')
       .eq('company_id', typedCompany.id)
       .order('created_at', { ascending: false }),
     supabase

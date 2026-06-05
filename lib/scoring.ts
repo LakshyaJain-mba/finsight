@@ -76,7 +76,7 @@ export async function recomputeAndPersistScore(
 ): Promise<ScoreResult> {
   const { data } = await supabase
     .from('guidance_statements')
-    .select('confidence_signal, period, is_active, guidance_outcomes(outcome, method)')
+    .select('confidence_signal, period, is_active, guidance_outcomes!left(outcome, method)')
     .eq('company_id', companyId);
 
   const rows: ScoringRow[] = (data ?? []).map((r: any) => {

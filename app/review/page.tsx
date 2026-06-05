@@ -28,7 +28,7 @@ export default async function ReviewPage({
   let query = supabase
     .from('guidance_statements')
     .select(
-      '*, companies(ticker, name), documents(period, title), guidance_outcomes(outcome, method)'
+      '*, companies!left(ticker, name), documents!left(period, title), guidance_outcomes!left(outcome, method)'
     )
     .eq('is_active', true)
     .order('created_at', { ascending: false })

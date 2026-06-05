@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
       let query = supabase
         .from('guidance_statements')
         .select(
-          '*, companies(ticker, name), documents(period, title), guidance_outcomes(outcome, method)'
+          '*, companies!left(ticker, name), documents!left(period, title), guidance_outcomes!left(outcome, method)'
         )
         .eq('is_active', true)
         .order('created_at', { ascending: false })
@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
 
     const { data, error } = await supabase
       .from('guidance_statements')
-      .select('*, documents(period, title), guidance_outcomes(*)')
+      .select('*, documents!left(period, title), guidance_outcomes!left(*)')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false });
 

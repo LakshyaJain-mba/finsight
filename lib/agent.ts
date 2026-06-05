@@ -36,7 +36,7 @@ export async function routeQuery(
     if (companyId) {
       const { data } = await supabase
         .from('guidance_statements')
-        .select('*, documents(period, title), guidance_outcomes(outcome, actual_value)')
+        .select('*, documents!left(period, title), guidance_outcomes!left(outcome, actual_value)')
         .eq('company_id', companyId)
         .limit(20);
       context = JSON.stringify(data ?? []);
@@ -51,7 +51,7 @@ export async function routeQuery(
     // Vector similarity search
     const ticker = intentTicker;
     if (ticker) {
-      const embedding = await generateEmbedding(query);
+      const embedding = await generateEmbedding(query, 'query');
       const { data } = await supabase.rpc('match_chunks', {
         query_embedding: embedding,
         ticker_filter: ticker.toUpperCase(),
@@ -61,7 +61,7 @@ export async function routeQuery(
       citations =
         data?.map((c: any) => ({
           document_id: c.document_id,
-          period: '',
+          period: c.period ?? '',
           excerpt: c.content.slice(0, 150),
         })) || [];
     }
@@ -69,7 +69,7 @@ export async function routeQuery(
     // Fetch management scores for comparison
     const { data } = await supabase
       .from('management_scores')
-      .select('*, companies(ticker, name, sector)')
+      .select('*, companies!left(ticker, name, sector)')
       .limit(10);
     context = JSON.stringify(data ?? []);
   } else {

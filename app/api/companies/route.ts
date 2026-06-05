@@ -10,7 +10,7 @@ export async function GET() {
     const supabase = createServiceClient();
     const { data, error } = await supabase
       .from('companies')
-      .select('*, management_scores(*)')
+      .select('*, management_scores!left(*)')
       .order('created_at', { ascending: false });
 
     if (error) {
