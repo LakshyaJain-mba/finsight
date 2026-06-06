@@ -59,24 +59,35 @@ for (const tx of labels.transcripts) {
   const extracted = (stmts ?? []).filter((s) => s.is_active !== false);
   extractedTotal += extracted.length;
 
-  // Match each golden statement to an extraction (metric_key + target_period +
-  // statement_contains substrings). One extraction matches at most one golden.
+  // Match each golden statement to an extraction. Candidate = same metric_key +
+  // statement_contains substrings. When several candidates exist (e.g. the same
+  // metric guided for two periods, as in a revision case), prefer the one whose
+  // target_period also matches so we don't bind to the wrong period's row.
+  // target_period is NOT a hard match requirement — timeframe is scored
+  // separately below so a period miss is still counted as a recall hit but a
+  // timeframe error.
   const used = new Set();
   for (const g of tx.guidance ?? []) {
     goldenTotal++;
-    const idx = extracted.findIndex((e, i) => {
-      if (used.has(i)) return false;
-      if (lc(e.metric_key) !== lc(g.metric_key)) return false;
-      const subs = g.statement_contains ?? [];
-      return subs.length === 0 || containsAll(e.statement, subs);
-    });
-    if (idx !== -1) {
-      used.add(idx);
+    const subs = g.statement_contains ?? [];
+    const candidates = extracted
+      .map((e, i) => ({ e, i }))
+      .filter(
+        ({ e, i }) =>
+          !used.has(i) &&
+          lc(e.metric_key) === lc(g.metric_key) &&
+          (subs.length === 0 || containsAll(e.statement, subs))
+      );
+    // Tie-break: exact target_period match first.
+    const preferred =
+      candidates.find(({ e }) => lc(e.target_period) === lc(g.target_period)) ?? candidates[0];
+    if (preferred) {
+      used.add(preferred.i);
       truePos++;
       // Timeframe accuracy on matched items.
       if (g.target_period) {
         timeframeApplicable++;
-        if (lc(extracted[idx].target_period) === lc(g.target_period)) timeframeCorrect++;
+        if (lc(preferred.e.target_period) === lc(g.target_period)) timeframeCorrect++;
       }
     }
   }
