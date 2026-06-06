@@ -1,0 +1,55 @@
+{
+  "_README": "SAMPLE FORMAT ONLY - NOT REAL LABELS. Copy to data/golden_labels.json and fill every value by hand against the real transcript. The evaluator refuses to run on this example (version EXAMPLE-DO-NOT-USE). Do not auto-generate labels.",
+  "_schema": {
+    "version": "string",
+    "transcripts[]": {
+      "ticker": "string",
+      "period": "string (as ingested, e.g. Q2FY25)",
+      "doc_type": "concall|annual_report|drhp|filing|quarterly_results|investor_presentation|rating_report",
+      "source_file": "optional path to .txt/.pdf for ingestion",
+      "guidance[]": {
+        "metric_key": "canonical key from lib/taxonomy.ts (or OTHER)",
+        "target_period": "canonical token: FY2025 | FY2025-Q3 | FY2025-H1 | FY2025..FY2027",
+        "value_type": "point|range|threshold|directional|qualitative",
+        "polarity": "HIGHER_BETTER|LOWER_BETTER|TARGET_ATTAINMENT|CONTEXT_DEPENDENT",
+        "statement_contains": ["case-insensitive substrings the matched extraction must contain"]
+      },
+      "revisions[]": {
+        "metric_key": "string",
+        "target_period": "string",
+        "direction": "UPGRADE|DOWNGRADE|REAFFIRMED"
+      },
+      "queries[]": {
+        "query": "string",
+        "relevant_contains": ["a retrieved chunk is relevant if it contains ANY of these"],
+        "expected_period": "optional: period a correct citation should reference"
+      }
+    }
+  },
+  "version": "EXAMPLE-DO-NOT-USE",
+  "transcripts": [
+    {
+      "ticker": "EXAMPLE",
+      "period": "Q2FY25",
+      "doc_type": "concall",
+      "source_file": "data/transcripts/example_q2fy25.txt",
+      "guidance": [
+        {
+          "metric_key": "REVENUE_GROWTH",
+          "target_period": "FY2025",
+          "value_type": "range",
+          "polarity": "HIGHER_BETTER",
+          "statement_contains": ["revenue growth", "14"]
+        }
+      ],
+      "revisions": [],
+      "queries": [
+        {
+          "query": "What did management say about revenue growth guidance?",
+          "relevant_contains": ["revenue growth"],
+          "expected_period": "Q2FY25"
+        }
+      ]
+    }
+  ]
+}
