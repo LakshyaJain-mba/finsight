@@ -1,15 +1,18 @@
 // RAG quality evaluator.
-// Measures: retrieval hit@5 (via /api/chat citations + match_chunks) and
-// citation accuracy (cited period/excerpt traces to a real source chunk),
-// against human golden query labels.
+// Measures:
+//  - retrieval hit@5: computed from ACTUAL match_chunks rows for a REAL query
+//    embedding (R2). The LLM answer text is NOT part of the hit decision.
+//  - citation accuracy: each chat citation must trace to a real retrieved chunk.
+//  - CRITICAL: fabricated citation (cites content that exists in no chunk) forces NO-GO (R3).
 //
-// Prereq: dev server running (npm run dev) + transcripts ingested.
+// Prereq: dev server running (npm run dev) + transcripts ingested + GEMINI_API_KEY.
 // Usage: node scripts/evaluate-rag.mjs
 
 import {
   loadGoldenLabels,
   supabaseService,
   BASE_URL,
+  embedQuery,
   containsAny,
   lc,
   round,
@@ -26,6 +29,7 @@ let hitCount = 0;
 let queryCount = 0;
 let citationCorrect = 0;
 let citationTotal = 0;
+const criticalFailures = [];
 
 async function companyId(ticker) {
   const { data } = await supabase
@@ -36,21 +40,23 @@ async function companyId(ticker) {
   return data?.id ?? null;
 }
 
-// A citation is "correct" if its excerpt traces to a real stored chunk for the
-// company (and, when expected_period is labeled, the period matches).
-async function citationTraces(cid, citation, expectedPeriod) {
-  if (expectedPeriod && citation.period && lc(citation.period) !== lc(expectedPeriod)) {
-    return false;
-  }
-  const excerpt = (citation.excerpt ?? '').slice(0, 60);
-  if (!excerpt) return false;
+// Does a citation excerpt trace to a real chunk for this company?
+// Returns { traced: boolean, periodMismatch: boolean }.
+async function traceCitation(cid, citation, expectedPeriod) {
+  const excerpt = (citation.excerpt ?? '').trim().slice(0, 80);
+  if (!excerpt) return { traced: false, periodMismatch: false };
+  // Normalise whitespace for a more robust contains-match.
+  const needle = excerpt.replace(/\s+/g, ' ').replace(/[%_]/g, ' ').slice(0, 60);
   const { data } = await supabase
     .from('document_chunks')
-    .select('id, content, documents!inner(company_id)')
+    .select('id, documents!inner(company_id, period)')
     .eq('documents.company_id', cid)
-    .ilike('content', `%${excerpt.replace(/[%_]/g, ' ')}%`)
+    .ilike('content', `%${needle}%`)
     .limit(1);
-  return (data ?? []).length > 0;
+  const traced = (data ?? []).length > 0;
+  const periodMismatch =
+    traced && expectedPeriod && citation.period && lc(citation.period) !== lc(expectedPeriod);
+  return { traced, periodMismatch };
 }
 
 async function chat(query, ticker) {
@@ -82,31 +88,41 @@ for (const tx of labels.transcripts) {
   for (const q of tx.queries ?? []) {
     queryCount++;
 
-    // Retrieval hit@5: does match_chunks top-5 contain a gold-relevant chunk?
-    const { data: chunks, error } = await supabase.rpc('match_chunks', {
-      // The query embedding is produced by the app on the chat path; for the
-      // retrieval probe we reuse chat citations (already vector-retrieved) and
-      // additionally accept a direct content match within the company's chunks.
-      query_embedding: Array.from({ length: 1536 }, () => 0),
-      ticker_filter: tx.ticker.toUpperCase(),
-      match_count: 5,
-    });
-    // The zero-vector RPC only confirms availability; true relevance is judged
-    // from the chat path (vector-retrieved context surfaced as citations).
-    const { answer, citations } = await chat(q.query, tx.ticker);
-
-    const haystack = [answer, ...citations.map((c) => c.excerpt ?? '')].join(' \n ');
-    const hit = containsAny(haystack, q.relevant_contains ?? []);
+    // R2: REAL retrieval. Embed the query like the app does, then read the
+    // top-5 chunks from match_chunks. hit@5 is judged ONLY from these rows.
+    let retrievedContents = [];
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const embedding = await embedQuery(q.query);
+      // eslint-disable-next-line no-await-in-loop
+      const { data: chunks, error } = await supabase.rpc('match_chunks', {
+        query_embedding: embedding,
+        ticker_filter: tx.ticker.toUpperCase(),
+        match_count: 5,
+      });
+      if (error) console.error(`WARN: match_chunks error for ${tx.ticker}: ${error.message}`);
+      retrievedContents = (chunks ?? []).map((c) => c.content ?? '');
+    } catch (e) {
+      console.error(`WARN: query embedding failed: ${e.message}`);
+    }
+    const hit = containsAny(retrievedContents.join(' \n '), q.relevant_contains ?? []);
     if (hit) hitCount++;
 
-    // Citation accuracy.
+    // Citation accuracy + fabricated-citation critical check (R3) from chat.
+    // eslint-disable-next-line no-await-in-loop
+    const { citations } = await chat(q.query, tx.ticker);
     for (const c of citations) {
       citationTotal++;
       // eslint-disable-next-line no-await-in-loop
-      if (await citationTraces(cid, c, q.expected_period)) citationCorrect++;
+      const { traced, periodMismatch } = await traceCitation(cid, c, q.expected_period);
+      if (traced && !periodMismatch) citationCorrect++;
+      if (!traced) {
+        criticalFailures.push({
+          type: 'fabricated_citation',
+          detail: `${tx.ticker} "${q.query}": citation excerpt not found in any chunk: "${(c.excerpt ?? '').slice(0, 60)}"`,
+        });
+      }
     }
-
-    if (error) console.error(`WARN: match_chunks error for ${tx.ticker}: ${error.message}`);
   }
 }
 
@@ -121,7 +137,7 @@ const scorecard = {
     retrieval_hit_at_5: {
       value: round(hitAt5),
       status: classify('retrieval_hit_at_5', hitAt5),
-      detail: `${hitCount}/${queryCount} queries`,
+      detail: `${hitCount}/${queryCount} queries (from match_chunks rows only)`,
     },
     citation_accuracy: {
       value: round(citationAcc),
@@ -129,6 +145,7 @@ const scorecard = {
       detail: citationTotal === 0 ? 'no citations returned' : `${citationCorrect}/${citationTotal}`,
     },
   },
+  critical_failures: criticalFailures,
 };
 scorecard.verdict = overallVerdict(scorecard);
 printScorecard(scorecard);
