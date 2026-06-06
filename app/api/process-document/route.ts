@@ -193,7 +193,9 @@ export async function POST(req: NextRequest) {
           metric: s.metric ?? null,
           statement: (s.statement ?? '').slice(0, 200),
           guidance_type: s.guidance_type ?? null,
-          value_given: s.value_given ?? null,
+          // Option B: normalized value — null when a hard unit mismatch makes
+          // the raw value untrustworthy (statement text is preserved below).
+          value_given: norm.value_given,
           timeframe: s.timeframe ?? null,
           qualifier: s.qualifier ?? null,
           confidence_signal: s.confidence_signal ?? null,

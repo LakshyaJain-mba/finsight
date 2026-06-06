@@ -123,6 +123,7 @@ export function parseValue(raw: string | null, metricKey?: string): ParsedValue 
         direction: null,
         raw: text,
         confidence_v: 0.8 * confPenalty,
+        unit_mismatch: mismatch,
       };
     }
   }
@@ -140,7 +141,7 @@ export function parseValue(raw: string | null, metricKey?: string): ParsedValue 
       low /= 100;
       high /= 100;
     }
-    return { type: 'range', low, high, unit, direction: null, raw: text, confidence_v: 1.0 * confPenalty };
+    return { type: 'range', low, high, unit, direction: null, raw: text, confidence_v: 1.0 * confPenalty, unit_mismatch: mismatch };
   }
 
   // Threshold: "at least / minimum / north of / >" (lower bound)
@@ -160,6 +161,7 @@ export function parseValue(raw: string | null, metricKey?: string): ParsedValue 
       direction: null,
       raw: text,
       confidence_v: 1.0 * confPenalty,
+      unit_mismatch: mismatch,
     };
   }
 
@@ -168,7 +170,7 @@ export function parseValue(raw: string | null, metricKey?: string): ParsedValue 
     let v = num(m[1]);
     if (applyCrore) v = toCrore(v, text);
     if (isBps) v /= 100;
-    return { type: 'point', low: v, high: v, unit, direction: null, raw: text, confidence_v: 1.0 * confPenalty };
+    return { type: 'point', low: v, high: v, unit, direction: null, raw: text, confidence_v: 1.0 * confPenalty, unit_mismatch: mismatch };
   }
 
   // Directional (no numbers): improve/increase vs reduce/decline, or flat

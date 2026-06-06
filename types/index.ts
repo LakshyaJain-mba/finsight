@@ -65,6 +65,10 @@ export interface ParsedValue {
   direction: 'up' | 'down' | 'flat' | null;
   raw: string | null;
   confidence_v: number;
+  // True when the value's unit hard-contradicts the metric's expected unit
+  // (e.g. a currency figure for a percentage metric). Optional for backward
+  // compatibility with rows/objects created before this flag existed.
+  unit_mismatch?: boolean;
 }
 
 export type OutcomeMethod = 'manual' | 'ai_suggested' | 'ai_auto' | 'analyst_confirmed';

@@ -11,6 +11,11 @@ export interface NormalizedGuidance {
   polarity: Polarity | null;
   target_period: string | null;
   parsed_value: ParsedValue;
+  // The value string to persist. Null when a hard unit mismatch makes the raw
+  // value untrustworthy (Option B): we do not rewrite it, we suppress it and
+  // flag the statement for review while preserving the statement text.
+  value_given: string | null;
+  needs_review: boolean;
 }
 
 export function normalizeGuidance(
@@ -23,10 +28,19 @@ export function normalizeGuidance(
   const tf = parseTimeframe(s.timeframe ?? '', statementPeriod);
   const parsed = parseValue(s.value_given ?? null, canon.metric_key);
 
+  // Option B: on a hard unit mismatch (e.g. EBITDA_MARGIN/NIM/PE with a
+  // currency value), do NOT rewrite the number. Suppress value_given (null),
+  // keep the statement text, and flag for review. parsed_value retains the
+  // mismatch flag and reduced confidence from the parser.
+  const hardMismatch = parsed.unit_mismatch === true;
+  const value_given = hardMismatch ? null : s.value_given ?? null;
+
   return {
     metric_key: canon.metric_key,
     polarity: canon.polarity,
     target_period: tf.target_period,
     parsed_value: parsed,
+    value_given,
+    needs_review: hardMismatch,
   };
 }
