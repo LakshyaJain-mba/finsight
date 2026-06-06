@@ -32,10 +32,10 @@ export const METRIC_TAXONOMY: MetricConfig[] = [
   { key: 'EFFECTIVE_TAX_RATE', aliases: ['etr', 'tax rate', 'effective tax rate'], unit: '%', polarity: 'TARGET_ATTAINMENT', resolution_method: 'RM-PLAN-ATTAIN', confidence_notes: 'New vs old tax regime; deferred tax' },
 
   // §1.4 Balance Sheet, Leverage & Asset Quality
-  { key: 'NET_DEBT', aliases: ['net debt', 'net borrowings'], unit: '₹ cr', polarity: 'LOWER_BETTER', resolution_method: 'RM-ABS', confidence_notes: 'Lease liabilities (Ind-AS 116) inclusion' },
+  { key: 'NET_DEBT', aliases: ['net debt', 'net borrowings', 'debt reduction', 'debt reduce', 'reduce debt', 'reduce net debt', 'deleverage', 'deleveraging', 'debt repayment', 'debt free', 'net debt reduction', 'pare debt', 'bring down debt'], unit: '₹ cr', polarity: 'LOWER_BETTER', resolution_method: 'RM-ABS', confidence_notes: 'Lease liabilities (Ind-AS 116) inclusion' },
   { key: 'NET_DEBT_TO_EBITDA', aliases: ['leverage', 'net debt to ebitda', 'net debt/ebitda'], unit: 'x', polarity: 'LOWER_BETTER', resolution_method: 'RM-RATIO', confidence_notes: 'TTM vs current EBITDA' },
   { key: 'DEBT_TO_EQUITY', aliases: ['gearing', 'd/e', 'debt to equity', 'debt-equity'], unit: 'x', polarity: 'LOWER_BETTER', resolution_method: 'RM-RATIO', confidence_notes: 'Off-BS items' },
-  { key: 'WORKING_CAPITAL_DAYS', aliases: ['nwc days', 'working capital days', 'cash conversion cycle'], unit: 'days', polarity: 'LOWER_BETTER', resolution_method: 'RM-RATIO', confidence_notes: 'Component definitions' },
+  { key: 'WORKING_CAPITAL_DAYS', aliases: ['nwc days', 'working capital days', 'cash conversion cycle', 'working capital', 'working capital cycle', 'inventory days', 'inventory levels', 'inventory reduction', 'receivable days', 'payable days'], unit: 'days', polarity: 'LOWER_BETTER', resolution_method: 'RM-RATIO', confidence_notes: 'Component definitions; inventory/receivable/payable proxies' },
   { key: 'CAPEX', aliases: ['capex', 'capital expenditure'], unit: '₹ cr', polarity: 'TARGET_ATTAINMENT', resolution_method: 'RM-PLAN-ATTAIN', confidence_notes: 'Commitment vs cash capex; multi-year phasing' },
   { key: 'GROSS_NPA', aliases: ['gnpa', 'gross npa'], unit: '%', polarity: 'LOWER_BETTER', resolution_method: 'RM-LEVEL', sector: 'Bank/NBFC', confidence_notes: 'RBI norms; write-off effect' },
   { key: 'NET_NPA', aliases: ['nnpa', 'net npa'], unit: '%', polarity: 'LOWER_BETTER', resolution_method: 'RM-LEVEL', sector: 'Bank/NBFC', confidence_notes: 'PCR linkage' },

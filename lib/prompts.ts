@@ -8,7 +8,7 @@ For each statement output a JSON object with these exact fields:
 - metric: category (revenue_growth/margin/capex/volume/debt/other)
 - statement: exact quote, max 200 chars
 - guidance_type: quantitative | qualitative | directional
-- value_given: specific number or range if given, else null
+- value_given: specific number or range if given, else null. ALWAYS include the unit (e.g. "15%", "14-16%", "500 crore", "2.5x", "30 days"); for margins/ratios/growth use % not currency
 - timeframe: period referenced (FY25/Q3FY25/next 2 years/etc)
 - qualifier: exact hedging word used (expect/target/aim/hope/confident/plan)
 - confidence_signal: high | medium | hedged | vague

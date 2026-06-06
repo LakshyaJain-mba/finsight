@@ -1,6 +1,11 @@
-// Value Parser — implementation of Spec v1.0 §4.4 value normalization (FROZEN).
+// Value Parser — implementation of Spec v1.0 §4.4 value normalization.
 // Converts free-text guidance/actual values into a structured ParsedValue.
+//
+// P2 (audit fix): metric-aware unit validation. When the metric's canonical
+// unit is rate-like (%, bps, x) we never store the value as currency (₹ cr),
+// and vice-versa — preventing the "EBITDA margin = 20 crore" class of error.
 import type { ParsedValue } from '@/types';
+import { getMetricConfig } from './taxonomy';
 
 function empty(raw: string | null, confidence_v = 0): ParsedValue {
   return { type: null, low: null, high: null, unit: null, direction: null, raw, confidence_v };
@@ -16,6 +21,30 @@ const PHRASES: { re: RegExp; build: () => Partial<ParsedValue> }[] = [
   { re: /high[\s-]?teens?/i, build: () => ({ type: 'range', low: 17, high: 19 }) },
   { re: /double[\s-]?digit/i, build: () => ({ type: 'threshold', low: 10, high: null }) },
 ];
+
+// The unit "family" a metric expects, derived from its taxonomy unit.
+type UnitFamily = 'rate' | 'currency' | 'days' | 'multiple' | 'other' | null;
+
+function metricUnitFamily(metricKey?: string): UnitFamily {
+  if (!metricKey || metricKey === 'OTHER') return null;
+  const cfg = getMetricConfig(metricKey);
+  if (!cfg) return null;
+  switch (cfg.unit) {
+    case '%':
+    case '% YoY':
+      return 'rate';
+    case '₹ cr':
+    case '₹':
+    case '₹/unit':
+      return 'currency';
+    case 'days':
+      return 'days';
+    case 'x':
+      return 'multiple';
+    default:
+      return 'other';
+  }
+}
 
 function detectUnit(text: string): string | null {
   if (/%|percent|per cent|bps|basis point/i.test(text)) return '%';
@@ -35,18 +64,54 @@ function num(s: string): number {
 }
 
 /**
- * Parse a raw value string into a ParsedValue. `metricKey` is accepted for
- * future metric-specific handling; defaults are metric-agnostic.
+ * Reconcile the unit detected from the text with the unit the metric expects.
+ * Returns the unit to store plus whether a currency conversion should apply.
+ * When the text's unit contradicts a known rate/multiple metric, we trust the
+ * metric (a margin is never ₹ cr) and drop the spurious currency conversion.
  */
-export function parseValue(raw: string | null, _metricKey?: string): ParsedValue {
+function reconcileUnit(
+  detected: string | null,
+  family: UnitFamily,
+  hasCurrencyCue: boolean
+): { unit: string | null; applyCrore: boolean; mismatch: boolean } {
+  if (family === 'rate') {
+    // Margin/ratio/growth metric: force %, never currency.
+    return { unit: '%', applyCrore: false, mismatch: detected === '₹ cr' };
+  }
+  if (family === 'multiple') {
+    return { unit: 'x', applyCrore: false, mismatch: detected === '₹ cr' || detected === '%' };
+  }
+  if (family === 'days') {
+    return { unit: 'days', applyCrore: false, mismatch: detected === '₹ cr' || detected === '%' };
+  }
+  if (family === 'currency') {
+    // Currency metric: keep ₹ cr; only convert when a currency cue is present.
+    return { unit: '₹ cr', applyCrore: hasCurrencyCue, mismatch: detected === '%' };
+  }
+  // Unknown metric family: fall back to the detected unit (legacy behavior).
+  return { unit: detected, applyCrore: detected === '₹ cr', mismatch: false };
+}
+
+/**
+ * Parse a raw value string into a ParsedValue. `metricKey` enables metric-aware
+ * unit validation (P2); when omitted the parser is metric-agnostic (legacy).
+ */
+export function parseValue(raw: string | null, metricKey?: string): ParsedValue {
   if (raw == null) return empty(null, 0);
   const text = String(raw).trim();
   if (!text) return empty(text, 0);
 
-  const unit = detectUnit(text);
+  const detected = detectUnit(text);
+  const family = metricUnitFamily(metricKey);
   const isBps = /bps|basis point/i.test(text);
+  const hasCurrencyCue = /₹|rs\.?|inr|cr\b|crore|lakh/i.test(text);
 
-  // Phrase-mapped bands (qualitative numerics).
+  const { unit, applyCrore, mismatch } = reconcileUnit(detected, family, hasCurrencyCue);
+  // A unit mismatch (e.g. "20 crore" for a margin) means the source value is
+  // suspect; lower confidence so it routes to review rather than auto-confirm.
+  const confPenalty = mismatch ? 0.5 : 1.0;
+
+  // Phrase-mapped bands (qualitative numerics) — inherently percentage.
   for (const { re, build } of PHRASES) {
     if (re.test(text)) {
       const part = build();
@@ -54,10 +119,10 @@ export function parseValue(raw: string | null, _metricKey?: string): ParsedValue
         type: part.type ?? 'range',
         low: part.low ?? null,
         high: part.high ?? null,
-        unit: '%',
+        unit: family === 'rate' || family == null ? '%' : unit,
         direction: null,
         raw: text,
-        confidence_v: 0.8,
+        confidence_v: 0.8 * confPenalty,
       };
     }
   }
@@ -67,7 +132,7 @@ export function parseValue(raw: string | null, _metricKey?: string): ParsedValue
   if (m) {
     let low = num(m[1]);
     let high = num(m[2]);
-    if (unit === '₹ cr') {
+    if (applyCrore) {
       low = toCrore(low, text);
       high = toCrore(high, text);
     }
@@ -75,7 +140,7 @@ export function parseValue(raw: string | null, _metricKey?: string): ParsedValue
       low /= 100;
       high /= 100;
     }
-    return { type: 'range', low, high, unit: unit ?? null, direction: null, raw: text, confidence_v: 1.0 };
+    return { type: 'range', low, high, unit, direction: null, raw: text, confidence_v: 1.0 * confPenalty };
   }
 
   // Threshold: "at least / minimum / north of / >" (lower bound)
@@ -85,36 +150,36 @@ export function parseValue(raw: string | null, _metricKey?: string): ParsedValue
   m = text.match(/(-?\d[\d,]*\.?\d*)/);
   if (m && (lowerBound || upperBound)) {
     let v = num(m[1]);
-    if (unit === '₹ cr') v = toCrore(v, text);
+    if (applyCrore) v = toCrore(v, text);
     if (isBps) v /= 100;
     return {
       type: 'threshold',
       low: lowerBound ? v : null,
       high: upperBound ? v : null,
-      unit: unit ?? null,
+      unit,
       direction: null,
       raw: text,
-      confidence_v: 1.0,
+      confidence_v: 1.0 * confPenalty,
     };
   }
 
   // Point: a single number with/without unit
   if (m) {
     let v = num(m[1]);
-    if (unit === '₹ cr') v = toCrore(v, text);
+    if (applyCrore) v = toCrore(v, text);
     if (isBps) v /= 100;
-    return { type: 'point', low: v, high: v, unit: unit ?? null, direction: null, raw: text, confidence_v: 1.0 };
+    return { type: 'point', low: v, high: v, unit, direction: null, raw: text, confidence_v: 1.0 * confPenalty };
   }
 
   // Directional (no numbers): improve/increase vs reduce/decline, or flat
   if (/(flat|flattish|stable|maintain|steady)/i.test(text)) {
-    return { type: 'directional', low: null, high: null, unit: unit ?? null, direction: 'flat', raw: text, confidence_v: 0.7 };
+    return { type: 'directional', low: null, high: null, unit, direction: 'flat', raw: text, confidence_v: 0.7 };
   }
   if (/(improv|increas|grow|higher|expand|rise|ramp|accelerat|strengthen)/i.test(text)) {
-    return { type: 'directional', low: null, high: null, unit: unit ?? null, direction: 'up', raw: text, confidence_v: 0.7 };
+    return { type: 'directional', low: null, high: null, unit, direction: 'up', raw: text, confidence_v: 0.7 };
   }
   if (/(reduc|declin|lower|decreas|deleverag|moderat|soften|contract)/i.test(text)) {
-    return { type: 'directional', low: null, high: null, unit: unit ?? null, direction: 'down', raw: text, confidence_v: 0.7 };
+    return { type: 'directional', low: null, high: null, unit, direction: 'down', raw: text, confidence_v: 0.7 };
   }
 
   return empty(text, 0.5);
