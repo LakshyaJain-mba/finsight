@@ -1,9 +1,14 @@
 -- Migration 002 — add source period to match_chunks results.
 -- Enables traceable chat citations (period) for the document_rag path.
--- Idempotent: CREATE OR REPLACE. Embedding dimension is unchanged (1536),
--- so no re-embedding is required.
+-- Embedding dimension is unchanged (1536), so no re-embedding is required.
+--
+-- NOTE: adding the `period` column changes the function's RETURNS TABLE type.
+-- Postgres forbids changing the return type via CREATE OR REPLACE, so we must
+-- DROP the old function first. The signature (argument types) is unchanged.
 
-create or replace function match_chunks(
+drop function if exists match_chunks(vector, text, int);
+
+create function match_chunks(
   query_embedding vector(1536),
   ticker_filter text,
   match_count int default 5

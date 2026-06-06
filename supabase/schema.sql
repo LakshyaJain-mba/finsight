@@ -119,7 +119,10 @@ create index on document_chunks using ivfflat (embedding vector_cosine_ops)
 
 -- Vector similarity search used by the document_rag agent path.
 -- Returns the source document period so chat citations are traceable.
-create or replace function match_chunks(
+-- Drop-then-create (not CREATE OR REPLACE) because the RETURNS TABLE type
+-- cannot be altered in place once the function exists.
+drop function if exists match_chunks(vector, text, int);
+create function match_chunks(
   query_embedding vector(1536),
   ticker_filter text,
   match_count int default 5
