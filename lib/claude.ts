@@ -12,6 +12,7 @@ import {
   buildRAGPrompt,
 } from './prompts';
 import type { AgentIntent, ChatMessage, RawExtractionResult } from '@/types';
+import { fetchOrThrow, withRetry } from './retry';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -84,18 +85,19 @@ async function generate(opts: GenerateOptions): Promise<string> {
     },
   };
 
-  const res = await fetch(
-    `${GEMINI_API_BASE}/models/${opts.model}:generateContent?key=${apiKey()}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }
+  const res = await withRetry(
+    () =>
+      fetchOrThrow(
+        `${GEMINI_API_BASE}/models/${opts.model}:generateContent?key=${apiKey()}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        `gemini:${opts.model}`
+      ),
+    { label: `gemini:${opts.model}` }
   );
-
-  if (!res.ok) {
-    throw new Error(`Gemini API error: ${res.status} ${await res.text()}`);
-  }
 
   const data = (await res.json()) as GeminiResponse;
   if (data.promptFeedback?.blockReason) {

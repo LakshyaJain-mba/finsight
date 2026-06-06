@@ -6,8 +6,11 @@
 //  3. OPENAI_API_KEY  -> OpenAI text-embedding-3-small
 // All providers are normalised to 1536 dimensions to match the pgvector column
 // (document_chunks.embedding vector(1536)). No schema change is required.
+import { fetchOrThrow, withRetry } from './retry';
 
 const EMBED_DIMS = 1536;
+
+
 
 // Retrieval quality improves when documents and queries are embedded with
 // distinct task types (asymmetric retrieval). Mapped per provider below.
@@ -39,22 +42,24 @@ async function embedWithGemini(
   kind: EmbeddingKind
 ): Promise<number[]> {
   const taskType = kind === 'query' ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT';
-  const res = await fetch(
-    `${GEMINI_API_BASE}/models/gemini-embedding-001:embedContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'models/gemini-embedding-001',
-        content: { parts: [{ text }] },
-        taskType,
-        outputDimensionality: EMBED_DIMS,
-      }),
-    }
+  const res = await withRetry(
+    () =>
+      fetchOrThrow(
+        `${GEMINI_API_BASE}/models/gemini-embedding-001:embedContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'models/gemini-embedding-001',
+            content: { parts: [{ text }] },
+            taskType,
+            outputDimensionality: EMBED_DIMS,
+          }),
+        },
+        'gemini-embedding'
+      ),
+    { label: 'gemini-embedding' }
   );
-  if (!res.ok) {
-    throw new Error(`Gemini embedding failed: ${res.status} ${await res.text()}`);
-  }
   const json = (await res.json()) as GeminiEmbeddingResponse;
   const values = json.embedding?.values;
   if (!values || values.length === 0) {
@@ -68,42 +73,52 @@ async function embedWithVoyage(
   apiKey: string,
   kind: EmbeddingKind
 ): Promise<number[]> {
-  const res = await fetch('https://api.voyageai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      input: text,
-      model: 'voyage-finance-2',
-      input_type: kind, // 'document' | 'query'
-      output_dimension: EMBED_DIMS,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Voyage embedding failed: ${res.status} ${await res.text()}`);
-  }
+  const res = await withRetry(
+    () =>
+      fetchOrThrow(
+        'https://api.voyageai.com/v1/embeddings',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            input: text,
+            model: 'voyage-finance-2',
+            input_type: kind, // 'document' | 'query'
+            output_dimension: EMBED_DIMS,
+          }),
+        },
+        'voyage-embedding'
+      ),
+    { label: 'voyage-embedding' }
+  );
   const json = (await res.json()) as ProviderListResponse;
   return json.data[0].embedding;
 }
 
 async function embedWithOpenAI(text: string, apiKey: string): Promise<number[]> {
-  const res = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      input: text,
-      model: 'text-embedding-3-small',
-      dimensions: EMBED_DIMS,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`OpenAI embedding failed: ${res.status} ${await res.text()}`);
-  }
+  const res = await withRetry(
+    () =>
+      fetchOrThrow(
+        'https://api.openai.com/v1/embeddings',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            input: text,
+            model: 'text-embedding-3-small',
+            dimensions: EMBED_DIMS,
+          }),
+        },
+        'openai-embedding'
+      ),
+    { label: 'openai-embedding' }
+  );
   const json = (await res.json()) as ProviderListResponse;
   return json.data[0].embedding;
 }
